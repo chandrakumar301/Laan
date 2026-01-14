@@ -83,13 +83,29 @@ const AdminDashboard = () => {
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      
+
       if (!session) {
         navigate("/login");
         return;
       }
 
       setUser({ email: session.user.email || "" });
+
+      // fetch applications from backend
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+        const resp = await fetch(`${API_BASE}/api/loans`);
+        const payload = await resp.json();
+        if (resp.ok && payload.loans) {
+          setApplications(payload.loans as any);
+        } else {
+          setApplications(mockApplications);
+        }
+      } catch (err) {
+        console.error("Failed to fetch loans", err);
+        setApplications(mockApplications);
+      }
+
       setIsLoading(false);
     };
 
@@ -97,28 +113,54 @@ const AdminDashboard = () => {
   }, [navigate]);
 
   const handleApprove = async (id: string) => {
-    setApplications((prev) =>
-      prev.map((app) =>
-        app.id === id ? { ...app, status: "approved" as const } : app
-      )
-    );
-    toast({
-      title: "Application Approved",
-      description: "The loan application has been approved successfully.",
-    });
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+      const app = applications.find((a) => a.id === id);
+      const resp = await fetch(`${API_BASE}/api/update-loan-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loanId: id, status: "approved", studentEmail: app?.student_email }),
+      });
+      if (!resp.ok) throw new Error("approve failed");
+      setApplications((prev) => prev.map((a) => (a.id === id ? { ...a, status: "approved" } : a)));
+      toast({ title: "Application Approved", description: "Loan approved and student notified." });
+    } catch (err: any) {
+      toast({ title: "Approve failed", description: err.message || "Could not approve.", variant: "destructive" });
+    }
   };
 
   const handleReject = async (id: string) => {
-    setApplications((prev) =>
-      prev.map((app) =>
-        app.id === id ? { ...app, status: "rejected" as const } : app
-      )
-    );
-    toast({
-      title: "Application Rejected",
-      description: "The loan application has been rejected.",
-      variant: "destructive",
-    });
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+      const app = applications.find((a) => a.id === id);
+      const resp = await fetch(`${API_BASE}/api/update-loan-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loanId: id, status: "rejected", studentEmail: app?.student_email }),
+      });
+      if (!resp.ok) throw new Error("reject failed");
+      setApplications((prev) => prev.map((a) => (a.id === id ? { ...a, status: "rejected" } : a)));
+      toast({ title: "Application Rejected", description: "The loan application has been rejected.", variant: "destructive" });
+    } catch (err: any) {
+      toast({ title: "Reject failed", description: err.message || "Could not reject.", variant: "destructive" });
+    }
+  };
+
+  const handleDisburse = async (id: string) => {
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+      const app = applications.find((a) => a.id === id);
+      const resp = await fetch(`${API_BASE}/api/update-loan-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loanId: id, status: "disbursed", studentEmail: app?.student_email }),
+      });
+      if (!resp.ok) throw new Error("disburse failed");
+      setApplications((prev) => prev.map((a) => (a.id === id ? { ...a, status: "disbursed" } : a)));
+      toast({ title: "Marked Disbursed", description: "Loan marked as disbursed. Please transfer via PhonePe manually." });
+    } catch (err: any) {
+      toast({ title: "Disburse failed", description: err.message || "Could not mark disbursed.", variant: "destructive" });
+    }
   };
 
   const filteredApplications = applications.filter((app) => {
@@ -310,7 +352,7 @@ const AdminDashboard = () => {
                             </div>
                           )}
                           {app.status === "approved" && (
-                            <Button variant="outline" size="sm">
+                            <Button variant="outline" size="sm" onClick={() => handleDisburse(app.id)}>
                               Disburse
                             </Button>
                           )}

@@ -51,25 +51,45 @@ const Register = () => {
       return;
     }
 
+    // sanitize and validate email
+    const email = formData.email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      toast({ title: "Invalid email", description: "Please enter a valid email address.", variant: "destructive" });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            full_name: formData.fullName,
-            phone: formData.phone,
-            college: formData.college,
-            course: formData.course,
-            year: formData.year,
-          },
-        },
-      });
+      const redirectTo = import.meta.env.VITE_SIGNUP_REDIRECT || "";
+      const userMetadata = {
+        full_name: formData.fullName,
+        phone: formData.phone,
+        college: formData.college,
+        course: formData.course,
+        year: formData.year,
+      };
 
-      if (error) throw error;
+      // Build credentials object; pass single argument to signUp (match typings)
+      const optionsObj: Record<string, unknown> = { data: userMetadata };
+      if (redirectTo) (optionsObj as any).emailRedirectTo = redirectTo;
+
+      // debug: log email details to detect hidden/invalid characters
+      console.log("signUp payload:", { email, optionsObj });
+      console.log("email length:", email.length);
+      console.log(
+        "email char codes:",
+        Array.from(email).map((c) => ({ char: c, code: c.charCodeAt(0) }))
+      );
+
+      const creds: Record<string, any> = { email, password: formData.password, options: optionsObj };
+      const { data, error } = await supabase.auth.signUp(creds);
+
+      if (error) {
+        console.error("Supabase signUp error object:", error);
+        throw error;
+      }
 
       toast({
         title: "Registration successful!",
@@ -77,10 +97,12 @@ const Register = () => {
       });
 
       navigate("/dashboard");
-    } catch (error: any) {
+    } catch (err: unknown) {
+      console.error("Register error:", err);
+      const message = err instanceof Error ? err.message : String(err);
       toast({
         title: "Registration failed",
-        description: error.message || "Something went wrong. Please try again.",
+        description: message || "Something went wrong. Please try again.",
         variant: "destructive",
       });
     } finally {

@@ -36,6 +36,9 @@ const Dashboard = () => {
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+  const [processingPayment, setProcessingPayment] = useState(false);
+  const [paidLoans, setPaidLoans] = useState<string[]>([]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -193,8 +196,77 @@ const Dashboard = () => {
                           variant="glass"
                           size="sm"
                           className="border-white/30 text-white hover:bg-white/10"
+                          onClick={async () => {
+                            if (!user?.email) {
+                              toast({ title: "Not signed in", description: "Please sign in to pay.", variant: "destructive" });
+                              return;
+                            }
+
+                            if (paidLoans.includes(activeLoan?.id || "")) return;
+
+                            setProcessingPayment(true);
+
+                            try {
+                              // create order on backend
+                              const resp = await fetch(`${API_BASE}/api/create-order`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ loanId: activeLoan?.id, studentId: user.email, amount: activeLoan?.amount })
+                              });
+                              const data = await resp.json();
+                              if (!resp.ok) throw new Error(data.error || "Failed to create order");
+
+                              // load razorpay script
+                              await new Promise((resolve, reject) => {
+                                if (window.Razorpay) return resolve(true);
+                                const s = document.createElement("script");
+                                s.src = "https://checkout.razorpay.com/v1/checkout.js";
+                                s.onload = () => resolve(true);
+                                s.onerror = () => reject(new Error("Razorpay script load failed"));
+                                document.body.appendChild(s);
+                              });
+
+                              const options = {
+                                key: data.key,
+                                amount: data.order.amount,
+                                currency: data.order.currency,
+                                name: "Student Loan",
+                                description: `Repayment for loan ${activeLoan?.id}`,
+                                order_id: data.order.id,
+                                handler: async function (response: any) {
+                                  // verify on backend
+                                  await fetch(`${API_BASE}/api/verify-payment`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      razorpay_order_id: response.razorpay_order_id,
+                                      razorpay_payment_id: response.razorpay_payment_id,
+                                      razorpay_signature: response.razorpay_signature,
+                                      loanId: activeLoan?.id,
+                                      studentId: user.email,
+                                      amount: activeLoan?.amount
+                                    })
+                                  });
+
+                                  setPaidLoans((p) => [...p, activeLoan?.id || ""]);
+                                  toast({ title: "Payment successful", description: "Thank you — payment recorded." });
+                                },
+                                prefill: { email: user.email }
+                              };
+
+                              // @ts-ignore
+                              const rzp = new window.Razorpay(options);
+                              rzp.open();
+                            } catch (err: any) {
+                              console.error(err);
+                              toast({ title: "Payment failed", description: err.message || "Could not start payment.", variant: "destructive" });
+                            } finally {
+                              setProcessingPayment(false);
+                            }
+                          }}
+                          disabled={processingPayment || (activeLoan && paidLoans.includes(activeLoan.id))}
                         >
-                          View Details
+                          {processingPayment ? "Processing..." : "Pay Now"}
                         </Button>
                       </div>
                     </div>

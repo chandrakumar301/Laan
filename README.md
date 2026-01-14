@@ -36,6 +36,40 @@ npm i
 npm run dev
 ```
 
+## Backend & Payment integration (Razorpay + Email)
+
+This project includes a simple Node Express backend at `server/index.js` to handle Razorpay order creation, verification, webhooks, and email notifications.
+
+Steps to run both frontend and backend locally:
+
+1. Copy `.env.example` to `.env` and fill in values (Razorpay keys, `SUPABASE_SERVICE_KEY`, SMTP credentials).
+
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Start the backend server:
+
+```bash
+npm run start:server
+```
+
+4. In another terminal, start the frontend:
+
+```bash
+npm run dev
+```
+
+Important environment variables:
+
+- `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`
+- `SUPABASE_SERVICE_KEY` (server-side only)
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`
+
+Security note: never commit secret keys to source control. Keep them in your local `.env` and server environment.
+
 **Edit a file directly in GitHub**
 
 - Navigate to the desired file(s).

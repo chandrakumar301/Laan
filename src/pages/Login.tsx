@@ -22,8 +22,16 @@ const Login = () => {
     setIsLoading(true);
 
     try {
+      const emailTrim = email.trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(emailTrim)) {
+        toast({ title: "Invalid email", description: "Please enter a valid email address.", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
-        email,
+        email: emailTrim,
         password,
       });
 
@@ -36,10 +44,12 @@ const Login = () => {
 
       // Check if user is admin (you would implement role checking logic here)
       navigate("/dashboard");
-    } catch (error: any) {
+    } catch (err: unknown) {
+      console.error("Login error:", err);
+      const message = err instanceof Error ? err.message : String(err);
       toast({
         title: "Login failed",
-        description: error.message || "Invalid email or password",
+        description: message || "Invalid email or password",
         variant: "destructive",
       });
     } finally {
