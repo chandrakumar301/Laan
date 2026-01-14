@@ -6,7 +6,11 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
-
+app.use(cors({
+  origin: "https://laan-six.vercel.app", // your frontend URL
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
 const app = express();
 
 // capture raw body for webhook verification

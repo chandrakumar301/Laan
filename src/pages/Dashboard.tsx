@@ -254,7 +254,7 @@ const Dashboard = () => {
                                 prefill: { email: user.email }
                               };
 
-                              // @ts-ignore
+                            
                               const rzp = new window.Razorpay(options);
                               rzp.open();
                             } catch (err: any) {
