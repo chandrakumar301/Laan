@@ -18,7 +18,7 @@ const LoanApplication = () => {
   const [form, setForm] = useState({ full_name: "", email: "", phone: "", college: "", amount: "", reason: "", account_number: "", account_holder_name: "", bank_name: "", ifsc_code: "" });
   const navigate = useNavigate();
   const { toast } = useToast();
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+  const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
 
   useEffect(() => {
     const checkAuth = async () => {
