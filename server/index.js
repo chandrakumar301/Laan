@@ -4,16 +4,16 @@ import bodyParser from "body-parser";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-
+const app = express();
 dotenv.config();
 app.use(cors({
   origin: "https://laan-six.vercel.app", // your frontend URL
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
-const app = express();
 
 // capture raw body for webhook verification
+app.use(cors())
 app.use(
   bodyParser.json({
     verify: (req, res, buf) => {
