@@ -39,6 +39,43 @@ if (!SUPABASE_SERVICE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+// Helper: fetch Supabase user from access token
+async function getUserFromToken(token) {
+  try {
+    if (!token) return null;
+    const url = SUPABASE_URL.replace(/\/$/, "") + "/auth/v1/user";
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+    const user = await resp.json();
+    return user;
+  } catch (err) {
+    console.error("getUserFromToken error", err);
+    return null;
+  }
+}
+
+// Middleware: require admin user (checks email against ADMIN_EMAIL)
+async function requireAdmin(req, res, next) {
+  try {
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "missing auth token" });
+    const user = await getUserFromToken(token);
+    if (!user || !user.email)
+      return res.status(401).json({ error: "invalid token" });
+    const adminEmail = process.env.ADMIN_EMAIL;
+    if (!adminEmail || user.email !== adminEmail)
+      return res.status(403).json({ error: "admin access required" });
+    req.adminUser = user;
+    next();
+  } catch (err) {
+    console.error("requireAdmin error", err);
+    res.status(500).json({ error: "server error" });
+  }
+}
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT || 587),
@@ -228,10 +265,304 @@ app.post("/api/apply-loan", async (req, res) => {
       console.error("failed to insert loan_history for application", err);
     }
 
+    // send acknowledgement to student immediately
+    try {
+      if (data && data.student_email) {
+        await sendEventEmail("application_submitted", data.student_email, {
+          name: data.student_name,
+          loanId: data.id,
+        });
+      }
+    } catch (err) {
+      console.error("failed to send acknowledgement to student", err);
+    }
+
+    // schedule automatic approval and notify user after 20 minutes
+    try {
+      const delayMs = 20 * 60 * 1000; // 20 minutes
+      setTimeout(async () => {
+        try {
+          // fetch latest loan state
+          const { data: latestLoan, error: fetchErr } = await supabase
+            .from("loans")
+            .select("*")
+            .eq("id", data.id)
+            .single();
+          if (fetchErr || !latestLoan) {
+            console.error("auto-approve: failed to fetch loan", fetchErr);
+            return;
+          }
+
+          // if already approved/rejected/paid/disbursed, skip
+          if (
+            ["approved", "rejected", "disbursed", "paid", "OVERDUE"].includes(
+              latestLoan.status
+            )
+          )
+            return;
+
+          const approvedAt = new Date().toISOString();
+          const { data: updated, error: updErr } = await supabase
+            .from("loans")
+            .update({ status: "approved", approved_at: approvedAt })
+            .eq("id", data.id)
+            .select()
+            .single();
+          if (updErr) {
+            console.error("auto-approve: failed to update loan", updErr);
+            return;
+          }
+
+          // log history
+          try {
+            await supabase.from("loan_history").insert([
+              {
+                loan_id: data.id,
+                status: "approved",
+                note: "Auto-approved after 20 minutes",
+                changed_by: "system",
+                created_at: approvedAt,
+              },
+            ]);
+          } catch (err) {
+            console.error("auto-approve: failed to insert history", err);
+          }
+
+          // notify student
+          try {
+            if (updated && updated.student_email) {
+              await sendEventEmail("approved", updated.student_email, {
+                name: updated.student_name,
+                loanId: data.id,
+                dueDate: updated.due_date,
+              });
+            }
+          } catch (err) {
+            console.error("auto-approve: failed to notify student", err);
+          }
+
+          // notify admin
+          try {
+            const adminEmail2 = process.env.ADMIN_EMAIL;
+            if (adminEmail2)
+              await logEmail(
+                adminEmail2,
+                "Loan Auto-Approved",
+                `Loan ${data.id} auto-approved by system.`,
+                "sent"
+              );
+          } catch (err) {
+            console.error("auto-approve: failed to notify admin", err);
+          }
+        } catch (err) {
+          console.error("auto-approve timer error", err);
+        }
+      }, delayMs);
+    } catch (err) {
+      console.error("failed to schedule auto-approval", err);
+    }
+
     res.json({ ok: true, loan: data });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "apply failed" });
+  }
+});
+
+// Prevent new applications when user has overdue loans and provide user's loan history
+app.get("/api/my-loans", async (req, res) => {
+  try {
+    const email = String(req.query.email || "");
+    if (!email) return res.status(400).json({ error: "email required" });
+
+    // fetch loans for user
+    const { data: loans, error } = await supabase
+      .from("loans")
+      .select("*")
+      .eq("student_email", email)
+      .order("applied_at", { ascending: false });
+    if (error) return res.status(500).json({ error: "failed to fetch loans" });
+
+    // for each loan compute payments sum and remaining amount, days left
+    const enriched = await Promise.all(
+      (loans || []).map(async (loan) => {
+        const { data: payments } = await supabase
+          .from("payments")
+          .select("amount,payment_status")
+          .eq("loan_id", loan.id);
+        const paid = (payments || [])
+          .filter((p) => p.payment_status === "success")
+          .reduce((s, p) => s + Number(p.amount || 0), 0);
+        const remaining = Number(loan.amount || 0) - paid;
+        let daysLeft = null;
+        if (loan.due_date) {
+          const due = new Date(loan.due_date);
+          const now = new Date();
+          const ms = due.getTime() - now.getTime();
+          daysLeft = Math.ceil(ms / (24 * 60 * 60 * 1000));
+        }
+        return { ...loan, paid, remaining, daysLeft };
+      })
+    );
+
+    res.json({ ok: true, loans: enriched });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// loan history
+app.get("/api/loan/:id/history", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { data, error } = await supabase
+      .from("loan_history")
+      .select("*")
+      .eq("loan_id", id)
+      .order("created_at", { ascending: true });
+    if (error)
+      return res.status(500).json({ error: "failed to fetch history" });
+    res.json({ ok: true, history: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// create payment record (student/admin)
+app.post("/api/payments", async (req, res) => {
+  try {
+    const {
+      loanId,
+      amount,
+      payment_method,
+      transaction_reference,
+      payment_date,
+      payment_status,
+    } = req.body;
+    if (!loanId || !amount)
+      return res.status(400).json({ error: "loanId and amount required" });
+
+    // fetch loan
+    const { data: loan } = await supabase
+      .from("loans")
+      .select("*")
+      .eq("id", loanId)
+      .single();
+    if (!loan) return res.status(404).json({ error: "loan not found" });
+
+    // compute existing successful payments
+    const { data: payments } = await supabase
+      .from("payments")
+      .select("amount,payment_status")
+      .eq("loan_id", loanId);
+    const paid = (payments || [])
+      .filter((p) => p.payment_status === "success")
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+
+    if (paid + Number(amount) > Number(loan.amount || 0)) {
+      return res.status(400).json({ error: "Payment exceeds loan amount" });
+    }
+
+    const { data, error } = await supabase
+      .from("payments")
+      .insert([
+        {
+          loan_id: loanId,
+          amount: amount,
+          payment_method,
+          transaction_reference,
+          payment_date: payment_date || new Date().toISOString(),
+          payment_status: payment_status || "pending",
+        },
+      ])
+      .select()
+      .single();
+    if (error) {
+      console.error("insert payment error", error);
+      return res
+        .status(500)
+        .json({ error: "failed to create payment", detail: error });
+    }
+
+    // if payment succeeded and fully paid, mark loan as paid
+    if ((payment_status || "pending") === "success") {
+      const newPaid = paid + Number(amount);
+      if (newPaid >= Number(loan.amount || 0)) {
+        await supabase
+          .from("loans")
+          .update({ status: "paid", paid_at: new Date().toISOString() })
+          .eq("id", loanId);
+        await supabase.from("loan_history").insert([
+          {
+            loan_id: loanId,
+            status: "paid",
+            note: "Loan fully paid",
+            changed_by: "system",
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        // notify student
+        if (loan.student_email)
+          await sendEventEmail("payment_success", loan.student_email, {
+            name: loan.student_name,
+            loanId,
+            amount: loan.amount,
+          });
+      }
+      // notify admin of payment
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (adminEmail)
+        await logEmail(
+          adminEmail,
+          "Payment Received",
+          `Payment received for loan ${loanId}: ₹${amount}`,
+          "sent"
+        );
+    }
+
+    res.json({ ok: true, payment: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// due payments for a user
+app.get("/api/due-payments", async (req, res) => {
+  try {
+    const email = String(req.query.email || "");
+    if (!email) return res.status(400).json({ error: "email required" });
+
+    const { data: loans } = await supabase
+      .from("loans")
+      .select("*")
+      .eq("student_email", email)
+      .order("due_date", { ascending: true });
+
+    const result = await Promise.all(
+      (loans || []).map(async (loan) => {
+        const { data: payments } = await supabase
+          .from("payments")
+          .select("amount,payment_status")
+          .eq("loan_id", loan.id);
+        const paid = (payments || [])
+          .filter((p) => p.payment_status === "success")
+          .reduce((s, p) => s + Number(p.amount || 0), 0);
+        const remaining = Number(loan.amount || 0) - paid;
+        const isOverdue =
+          loan.due_date &&
+          new Date() > new Date(loan.due_date) &&
+          remaining > 0;
+        return { ...loan, paid, remaining, isOverdue };
+      })
+    );
+
+    res.json({ ok: true, duePayments: result.filter((r) => r.remaining > 0) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
   }
 });
 
@@ -346,12 +677,13 @@ app.post("/api/update-loan-status", async (req, res) => {
     const updates = { status };
     if (status === "approved") {
       updates.approved_at = new Date().toISOString();
-      // set due_date = approved_at + 2 days
-      const due = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
-      updates.due_date = due.toISOString();
     }
     if (status === "disbursed") {
-      updates.disbursed_at = new Date().toISOString();
+      const disbursed_at = new Date().toISOString();
+      updates.disbursed_at = disbursed_at;
+      // set due_date = disbursed_at + 2 days (strict 2-day recovery period)
+      const due = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      updates.due_date = due.toISOString();
     }
 
     const { data, error } = await supabase
@@ -373,6 +705,22 @@ app.post("/api/update-loan-status", async (req, res) => {
           status,
           note: `Status changed to ${status}`,
           changed_by: "admin",
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      console.error("failed to insert loan_history for status change", err);
+    }
+
+    // record status change in loan_history
+    try {
+      const changedBy = req.body.adminEmail || "admin";
+      await supabase.from("loan_history").insert([
+        {
+          loan_id: loanId,
+          status,
+          note: `Status changed to ${status}`,
+          changed_by: changedBy,
           created_at: new Date().toISOString(),
         },
       ]);
