@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import "../App.css";
 
-const socket = io("http://localhost:4000");
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+const socket = io(SOCKET_URL);
 
 export default function Chat({ userName = "User" }) {
   const [messages, setMessages] = useState<any[]>([]);
