@@ -42,7 +42,7 @@ export const Header = ({ user, isAdmin }: HeaderProps) => {
         ]
     : [
         { path: "/", label: "Home" },
-        { path: "/calculator", label: "EMI Calculator" },
+        { path: "/chat", label: "Chat" },
       ];
 
   return (

@@ -11,6 +11,7 @@ import LoanApplication from "./pages/LoanApplication";
 import Calculator from "./pages/Calculator";
 import AdminDashboard from "./pages/AdminDashboard";
 import NotFound from "./pages/NotFound";
+import Chat from "./pages/Chat";
 
 const queryClient = new QueryClient();
 
@@ -26,9 +27,10 @@ const App = () => (
           <Route path="/register" element={<Register />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/apply" element={<LoanApplication />} />
-          <Route path="/calculator" element={<Calculator />} />
+          <Route path="/chat" element={<Chat />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="*" element={<NotFound />} />
+
         </Routes>
       </BrowserRouter>
     </TooltipProvider>
