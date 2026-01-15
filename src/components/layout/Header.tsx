@@ -5,7 +5,7 @@ import { GraduationCap, Menu, X, LogOut, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-
+import Chat from "/Chat";
 interface HeaderProps {
   user?: { email: string } | null;
   isAdmin?: boolean;
@@ -38,11 +38,11 @@ export const Header = ({ user, isAdmin }: HeaderProps) => {
       : [
           { path: "/dashboard", label: "Dashboard" },
           { path: "/apply", label: "Apply for Loan" },
-          { path: "/calculator", label: "EMI Calculator" },
+          { path: "/Chat", label: "Chat" },
         ]
     : [
         { path: "/", label: "Home" },
-        { path: "/chat", label: "Chat" },
+        { path: "/Chat", label: "Chat" },
       ];
 
   return (

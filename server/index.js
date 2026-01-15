@@ -6,6 +6,8 @@ import http from "http";
 import { Server } from "socket.io";
 import { Resend } from "resend";
 import { createClient } from "@supabase/supabase-js";
+import Razorpay from "razorpay";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -32,6 +34,21 @@ const io = new Server(server, {
 });
 
 /* =========================
+   RAZORPAY INSTANCE
+========================= */
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+/* =========================
+   MESSAGE HISTORY STORAGE
+========================= */
+
+const messageHistory = {};
+
+/* =========================
    SOCKET.IO CHAT
 ========================= */
 
@@ -43,26 +60,45 @@ io.on("connection", (socket) => {
     const room = `loan_${loanId}`;
     socket.join(room);
     console.log(`👤 ${user} joined ${room}`);
+
+    // Send message history to the new user
+    if (messageHistory[loanId]) {
+      socket.emit("message_history", messageHistory[loanId]);
+    }
+  });
+
+  // Request message history
+  socket.on("request_history", ({ loanId }) => {
+    if (messageHistory[loanId]) {
+      socket.emit("message_history", messageHistory[loanId]);
+    }
   });
 
   // Receive message and broadcast
   socket.on("send_message", (data) => {
-    /*
-      data = {
-        loanId,
-        sender,
-        name,
-        message,
-        time
-      }
-    */
     const room = `loan_${data.loanId}`;
 
+    // Store message in history
+    if (!messageHistory[data.loanId]) {
+      messageHistory[data.loanId] = [];
+    }
+    messageHistory[data.loanId].push({
+      sender: data.sender,
+      name: data.name,
+      message: data.message,
+      time: data.time,
+      type: data.type,
+      fileUrl: data.fileUrl,
+    });
+
+    // Broadcast to all users in the room
     io.to(room).emit("receive_message", {
       sender: data.sender,
       name: data.name,
       message: data.message,
       time: data.time,
+      type: data.type,
+      fileUrl: data.fileUrl,
     });
   });
 
@@ -112,6 +148,116 @@ const supabase = createClient(
 
 app.get("/api/health", (_, res) => {
   res.json({ ok: true });
+});
+
+/* =========================
+   RAZORPAY: CREATE ORDER
+========================= */
+
+app.post("/api/create-order", async (req, res) => {
+  try {
+    const { loanId, studentId, amount } = req.body;
+
+    if (!loanId || !studentId || !amount) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Create Razorpay order
+    const order = await razorpay.orders.create({
+      amount: Math.round(amount * 100), // Amount in paise (smallest currency unit)
+      currency: "INR",
+      receipt: `loan_${loanId}_${Date.now()}`,
+      notes: {
+        loanId,
+        studentId,
+      },
+    });
+
+    res.json({
+      ok: true,
+      order,
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+  } catch (err) {
+    console.error("Create order error:", err);
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+/* =========================
+   RAZORPAY: VERIFY PAYMENT
+========================= */
+
+app.post("/api/verify-payment", async (req, res) => {
+  try {
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      loanId,
+      studentId,
+      amount,
+    } = req.body;
+
+    // Verify signature
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
+      .digest("hex");
+
+    const isAuthentic = expectedSignature === razorpay_signature;
+
+    if (!isAuthentic) {
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+
+    // Store payment in database
+    const { data, error } = await supabase
+      .from("payments")
+      .insert([
+        {
+          loan_id: loanId,
+          student_id: studentId,
+          amount,
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+          status: "success",
+          paid_at: new Date().toISOString(),
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Payment DB error:", error);
+      return res.status(500).json({ error: "Failed to record payment" });
+    }
+
+    // Update loan status if needed
+    await supabase
+      .from("loans")
+      .update({ status: "paid" })
+      .eq("id", loanId);
+
+    // Send confirmation email
+    await sendEmail({
+      to: studentId,
+      subject: "Payment Confirmation",
+      html: `
+        <h3>Payment Successful</h3>
+        <p>Your payment of ₹${amount} has been received.</p>
+        <p>Payment ID: ${razorpay_payment_id}</p>
+        <p>Loan ID: ${loanId}</p>
+      `,
+    });
+
+    res.json({ ok: true, payment: data });
+  } catch (err) {
+    console.error("Verify payment error:", err);
+    res.status(500).json({ error: "Payment verification failed" });
+  }
 });
 
 /* =========================

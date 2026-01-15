@@ -25,7 +25,7 @@ export const Footer = () => {
             <ul className="space-y-2">
               <li>
                 <Link to="/calculator" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                  EMI Calculator
+                  Chat
                 </Link>
               </li>
               <li>
