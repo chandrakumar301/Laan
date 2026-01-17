@@ -1,14 +1,14 @@
-User-agent: Googlebot
-Allow: /
-
-User-agent: Bingbot
-Allow: /
-
-User-agent: Twitterbot
-Allow: /
-
-User-agent: facebookexternalhit
-Allow: /
+# Student Pathway Finance - Robots.txt
+# Allow search engines to crawl public pages
 
 User-agent: *
 Allow: /
+
+# Block private & sensitive paths
+Disallow: /admin
+Disallow: /api/
+Disallow: /node_modules/
+Disallow: /*.env
+
+# Sitemap
+Sitemap: https://packupc2.vercel.app/sitemap.xml

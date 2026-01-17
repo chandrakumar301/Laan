@@ -1,0 +1,37 @@
+{
+  "@context": "https://schema.org",
+  "@type": "FinancialService",
+  "name": "Student Pathway Finance",
+  "description": "Fast and easy student loans with flexible repayment options",
+  "url": "https://your-domain.com",
+  "logo": "https://your-domain.com/logo.png",
+  "areaServed": {
+    "@type": "Country",
+    "name": "IN"
+  },
+  "telephone": "+91-XXXXXXXXXX",
+  "email": "support@your-domain.com",
+  "sameAs": [
+    "https://www.facebook.com/studentpathway",
+    "https://www.twitter.com/studentpathway",
+    "https://www.linkedin.com/company/studentpathway"
+  ],
+  "address": {
+    "@type": "PostalAddress",
+    "addressCountry": "IN",
+    "addressLocality": "Your City",
+    "addressRegion": "Your State"
+  },
+  "aggregateRating": {
+    "@type": "AggregateRating",
+    "ratingValue": "4.8",
+    "reviewCount": "150"
+  },
+  "serviceType": "Personal Loan",
+  "offers": {
+    "@type": "Offer",
+    "priceCurrency": "INR",
+    "price": "Custom based on eligibility",
+    "description": "Personal loans for students"
+  }
+}
