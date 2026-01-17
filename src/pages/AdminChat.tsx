@@ -339,18 +339,23 @@ export default function AdminChat() {
 
   // Mark message as delivered
   const markMessageAsDelivered = async (messageId: string) => {
+    if (!messageId) return;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      await fetch(`${getApiUrl()}/chat/messages/${messageId}/read`, {
+      const response = await fetch(`${getApiUrl()}/chat/messages/${messageId}/read`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
         },
       });
+
+      if (!response.ok) {
+        console.warn("Mark as delivered failed:", response.status);
+      }
     } catch (err) {
-      console.error("Mark as delivered error:", err);
+      console.warn("Mark as delivered error:", err);
     }
   };
 
