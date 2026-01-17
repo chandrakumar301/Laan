@@ -378,22 +378,49 @@ export function registerChatRoutes(app, supabase, io) {
   app.post("/chat/messages", requireAuth(supabase), async (req, res) => {
     try {
       const { userId: senderId } = req.user;
-      const { conversationId, receiverId, message } = req.body;
+      const { conversationId, message } = req.body;
 
-      if (!message || !conversationId || !receiverId) {
+      console.log("[MSG] Received:", {
+        senderId,
+        conversationId,
+        message,
+        bodyKeys: Object.keys(req.body),
+      });
+
+      if (!message || !conversationId) {
+        console.error("[MSG] Missing fields:", {
+          hasMessage: !!message,
+          hasConvId: !!conversationId,
+        });
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      // Verify sender can send in this conversation
-      const canSend = await canSendMessage(
-        senderId,
-        receiverId,
-        conversationId,
-        supabase,
-      );
+      // Get conversation to find the other party
+      const { data: conversation, error: convError } = await supabase
+        .from("conversations")
+        .select("id, user_id, admin_id")
+        .eq("id", conversationId)
+        .single();
 
-      if (!canSend) {
-        return res.status(403).json({ error: "Cannot send message" });
+      if (convError || !conversation) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+
+      // Determine receiver (the other party)
+      const receiverId =
+        conversation.user_id === senderId
+          ? conversation.admin_id
+          : conversation.user_id;
+
+      if (!receiverId) {
+        return res.status(400).json({ error: "Invalid conversation" });
+      }
+
+      // Verify sender is part of this conversation
+      const isParticipant =
+        conversation.user_id === senderId || conversation.admin_id === senderId;
+      if (!isParticipant) {
+        return res.status(403).json({ error: "Not part of this conversation" });
       }
 
       // Create message

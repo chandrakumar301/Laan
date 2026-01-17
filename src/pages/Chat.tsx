@@ -138,7 +138,7 @@ export default function Chat() {
         setSocket(newSocket);
 
         /* Fetch or create conversation with admin */
-        await getOrCreateConversation(user.id, session.access_token);
+        await getOrCreateConversation(user, session.access_token);
         setLoading(false);
       } catch (err) {
         console.error("Init error:", err);
@@ -155,7 +155,7 @@ export default function Chat() {
   }, []);
 
   /* Get or create conversation */
-  const getOrCreateConversation = async (userId: string, token: string) => {
+  const getOrCreateConversation = async (user: any, token: string) => {
     try {
       const response = await fetch(`${API_URL}/chat/conversations`, {
         method: "GET",
@@ -187,17 +187,15 @@ export default function Chat() {
         }
       } else {
         /* Create new conversation */
-        // Create conversation with admin
-        console.log("Creating new conversation with currentUser:", currentUser);
+        // Regular user initiating conversation with admin - don't send userId
+        console.log("Creating new conversation with user:", user);
         const createRes = await fetch(`${API_URL}/chat/conversations`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ 
-            userId: currentUser.id // Send the user's own ID, backend will create conversation with admin
-          }),
+          body: JSON.stringify({}), // Empty body - backend will create with current user and admin
         });
 
         console.log("Create conversation response status:", createRes.status, createRes.ok);
@@ -278,6 +276,8 @@ export default function Chat() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
+      console.log("Sending message:", { conversationId, message: input });
+
       const response = await fetch(`${API_URL}/chat/messages`, {
         method: "POST",
         headers: {
@@ -286,13 +286,15 @@ export default function Chat() {
         },
         body: JSON.stringify({
           conversationId,
-          receiverId: currentUser.id, // Will be replaced by admin ID server-side
           message: input,
         }),
       });
 
+      console.log("Message response status:", response.status);
+
       if (!response.ok) {
-        console.error("Failed to send message:", response.status);
+        const errorData = await response.text();
+        console.error("Failed to send message:", response.status, errorData);
         return;
       }
 
