@@ -12,13 +12,22 @@ import { Footer } from "@/components/layout/Footer";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
+// Helper function to ensure HTTPS on production
+const getApiUrl = () => {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+  if (window.location.protocol === 'https:' && baseUrl.startsWith('http://')) {
+    return baseUrl.replace('http://', 'https://');
+  }
+  return baseUrl;
+};
+
 const LoanApplication = () => {
   const [user, setUser] = useState<{ email: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [form, setForm] = useState({ full_name: "", email: "", phone: "", college: "", amount: "", reason: "", account_number: "", account_holder_name: "", bank_name: "", ifsc_code: "" });
   const navigate = useNavigate();
   const { toast } = useToast();
-  const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+  const API_BASE = getApiUrl();
 
   useEffect(() => {
     const checkAuth = async () => {

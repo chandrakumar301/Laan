@@ -32,17 +32,16 @@ export const Header = ({ user, isAdmin }: HeaderProps) => {
     ? isAdmin
       ? [
           { path: "/admin", label: "Dashboard" },
-          { path: "/admin/applications", label: "Applications" },
-          { path: "/admin/students", label: "Students" },
+          { path: "/admin/chat", label: "Chat with Users" },
         ]
       : [
           { path: "/dashboard", label: "Dashboard" },
           { path: "/apply", label: "Apply for Loan" },
-          { path: "/Chat", label: "Chat" },
+          { path: "/chat", label: "Chat" },
         ]
     : [
         { path: "/", label: "Home" },
-        { path: "/Chat", label: "Chat" },
+        { path: "/chat", label: "Chat" },
       ];
 
   return (

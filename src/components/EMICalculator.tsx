@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Calculator, TrendingUp, Calendar, DollarSign } from "lucide-react";
+import { Calculator, TrendingUp, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -48,9 +48,9 @@ export const EMICalculator = ({
   }, [loanAmount, interestRate, tenure]);
 
   const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat("en-IN", {
       style: "currency",
-      currency: "USD",
+      currency: "INR",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value);
@@ -87,8 +87,8 @@ export const EMICalculator = ({
               className="cursor-pointer"
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>$1,000</span>
-              <span>$200,000</span>
+              <span>₹1,000</span>
+              <span>₹200,000</span>
             </div>
           </div>
 
@@ -161,7 +161,7 @@ export const EMICalculator = ({
           <CardContent className="pt-6 space-y-4">
             <div className="flex items-center justify-between py-3 border-b border-border">
               <div className="flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-primary" />
+                <TrendingUp className="h-4 w-4 text-primary" />
                 <span className="text-sm text-muted-foreground">Principal Amount</span>
               </div>
               <span className="font-semibold">{formatCurrency(loanAmount)}</span>

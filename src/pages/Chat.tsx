@@ -1,214 +1,448 @@
-import React, { useEffect, useState, useRef } from "react";
-import { io } from "socket.io-client";
+import { useEffect, useRef, useState } from "react";
+import { io, Socket } from "socket.io-client";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Send, AlertCircle, MessageCircle } from "lucide-react";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
-const socket = io(SOCKET_URL);
-
+/* ================= TYPES ================= */
 interface Message {
-  user: string;
-  text: string;
-  timestamp: number;
-  type?: "text" | "file";
-  fileUrl?: string;
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  receiver_id: string;
+  message_text: string;
+  created_at: string;
+  status: "sent" | "delivered" | "read";
+  is_read: boolean;
 }
 
-export default function Chat({ userName = "You" }) {
+interface Conversation {
+  id: string;
+  user_id: string;
+  admin_id: string;
+  user_email: string;
+  admin_email: string;
+  last_message_at: string;
+  unreadCount?: number;
+  lastMessage?: string;
+}
+
+/* ================= CONFIG ================= */
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+const API_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+const ADMIN_EMAIL = "edufund0099@gmail.com";
+
+/* ================= COMPONENT ================= */
+/**
+ * USER CHAT PAGE
+ * - Users can only chat with admin (edufund0099@gmail.com)
+ * - One 1-to-1 conversation
+ * - Real-time messaging with status tracking
+ * - Cannot see other users or their chats
+ */
+export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const STORAGE_KEY = "chat_messages_loan_1"; // Use unique key per loan
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Load messages from storage on mount
+  /* Auto-scroll to latest message */
   useEffect(() => {
-    const savedMessages = localStorage.getItem(STORAGE_KEY);
-    if (savedMessages) {
-      try {
-        const parsed = JSON.parse(savedMessages);
-        setMessages(parsed);
-      } catch (e) {
-        console.error("Failed to load messages:", e);
-      }
-    }
-  }, []);
-
-  // Save messages to storage whenever they change
-  useEffect(() => {
-    if (messages.length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    }
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  /* Initialize chat */
   useEffect(() => {
-    // Join loan room
-    socket.emit("join_room", { loanId: 1, user: userName });
+    const init = async () => {
+      try {
+        /* Get current user */
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) {
+          window.location.href = "/login";
+          return;
+        }
 
-    // Request message history from server
-    socket.emit("request_history", { loanId: 1 });
+        /* Verify user is not admin */
+        if (user.email === ADMIN_EMAIL) {
+          window.location.href = "/admin";
+          return;
+        }
 
-    // Listen for message history
-    socket.on("message_history", (history: any[]) => {
-      if (history && history.length > 0) {
-        setMessages(history);
+        setCurrentUser(user);
+
+        /* Sync user to public users table */
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          try {
+            await fetch(`${API_URL}/chat/sync-user`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+              },
+            });
+          } catch (err) {
+            console.warn("User sync error (non-critical):", err);
+          }
+        }
+
+        /* Initialize Socket.IO */
+        if (!session?.access_token) {
+          setError("No session found");
+          return;
+        }
+
+        const newSocket = io(SOCKET_URL, {
+          transports: ["websocket"],
+          auth: { token: session.access_token },
+        });
+
+        newSocket.on("auth_success", () => {
+          console.log("✅ Socket authenticated");
+        });
+
+        /* Receive new messages in real-time */
+        newSocket.on("message:received", (data: Message) => {
+          if (data.receiver_id === user.id) {
+            setMessages((prev) => [...prev, data]);
+            // Mark as delivered
+            if (data.status === "sent") {
+              markMessageAsDelivered(data.id);
+            }
+          }
+        });
+
+        /* Receive typing indicators */
+        newSocket.on("user:typing", () => {
+          setIsTyping(true);
+          setTimeout(() => setIsTyping(false), 3000);
+        });
+
+        newSocket.on("user:stop_typing", () => {
+          setIsTyping(false);
+        });
+
+        newSocket.on("connect_error", (error) => {
+          console.error("Socket error:", error);
+          setError("Connection error");
+        });
+
+        setSocket(newSocket);
+
+        /* Fetch or create conversation with admin */
+        await getOrCreateConversation(user.id, session.access_token);
+        setLoading(false);
+      } catch (err) {
+        console.error("Init error:", err);
+        setError(String(err));
+        setLoading(false);
       }
-    });
+    };
 
-    socket.on("receive_message", (data: any) => {
-      const newMessage = {
-        user: data.name,
-        text: data.message,
-        timestamp: data.time,
-        type: data.type || "text",
-        fileUrl: data.fileUrl,
-      };
-      
-      setMessages((prev) => {
-        // Avoid duplicates by checking timestamp and user
-        const isDuplicate = prev.some(
-          msg => msg.timestamp === newMessage.timestamp && msg.user === newMessage.user
-        );
-        if (isDuplicate) return prev;
-        return [...prev, newMessage];
-      });
-    });
+    init();
 
     return () => {
-      socket.off("receive_message");
-      socket.off("message_history");
+      if (socket) socket.disconnect();
     };
-  }, [userName]);
+  }, []);
 
-  const sendMessage = () => {
-    if (!input.trim() && !file) return;
+  /* Get or create conversation */
+  const getOrCreateConversation = async (userId: string, token: string) => {
+    try {
+      const response = await fetch(`${API_URL}/chat/conversations`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    let messageData: any = {
-      loanId: 1,
-      sender: userName,
-      name: userName,
-      message: input,
-      time: Date.now(),
-    };
+      if (!response.ok) {
+        setError("Failed to fetch conversation");
+        return;
+      }
 
-    if (file) {
-      messageData.type = "file";
-      messageData.fileUrl = URL.createObjectURL(file);
+      const data = await response.json();
+      const conversations = data.conversations || data || [];
+
+      console.log("Fetched conversations:", conversations);
+
+      if (conversations.length > 0) {
+        const conv = conversations[0];
+        if (!conv || !conv.id) {
+          console.error("Invalid conversation structure:", conv);
+          setError("Invalid conversation data");
+          return;
+        }
+        setConversationId(conv.id);
+        await loadMessages(conv.id, token);
+        // Join socket room
+        if (socket) {
+          socket.emit("join_conversation", { conversationId: conv.id });
+        }
+      } else {
+        /* Create new conversation */
+        // Create conversation with admin
+        console.log("Creating new conversation with currentUser:", currentUser);
+        const createRes = await fetch(`${API_URL}/chat/conversations`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ 
+            userId: currentUser.id // Send the user's own ID, backend will create conversation with admin
+          }),
+        });
+
+        console.log("Create conversation response status:", createRes.status, createRes.ok);
+
+        if (!createRes.ok) {
+          const errorData = await createRes.text();
+          console.error("Create conversation failed:", createRes.status, errorData);
+          setError(`Failed to create conversation: ${createRes.status}`);
+          return;
+        }
+
+        const newConvData = await createRes.json();
+        console.log("Create conversation response:", newConvData);
+        
+        const newConv = newConvData.conversation || newConvData;
+        console.log("Extracted conversation:", newConv);
+        
+        if (!newConv || !newConv.id) {
+          console.error("Invalid response structure:", newConvData);
+          setError("Failed to get conversation data");
+          return;
+        }
+
+        setConversationId(newConv.id);
+        // Join socket room
+        if (socket) {
+          socket.emit("join_conversation", {
+            conversationId: newConv.id,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Get conversation error:", err);
+      setError(String(err));
     }
-
-    socket.emit("send_message", messageData);
-    
-    // Add to local messages (will be saved to localStorage via useEffect)
-    setMessages((prev) => [...prev, messageData]);
-    setInput("");
-    setFile(null);
   };
 
-  useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  /* Load messages for conversation */
+  const loadMessages = async (convId: string, token: string) => {
+    try {
+      const response = await fetch(`${API_URL}/chat/messages/${convId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        setError("Failed to load messages");
+        return;
+      }
+
+      const data = await response.json();
+      setMessages(data.messages || []);
+    } catch (err) {
+      console.error("Load messages error:", err);
+      setError(String(err));
+    }
+  };
+
+  /* Mark message as delivered */
+  const markMessageAsDelivered = async (messageId: string) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      await fetch(`${API_URL}/chat/messages/${messageId}/read`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+    } catch (err) {
+      console.error("Mark as delivered error:", err);
+    }
+  };
+
+  /* Send message */
+  const sendMessage = async () => {
+    if (!input.trim() || !conversationId || !currentUser) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const response = await fetch(`${API_URL}/chat/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          conversationId,
+          receiverId: currentUser.id, // Will be replaced by admin ID server-side
+          message: input,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to send message:", response.status);
+        return;
+      }
+
+      const data = await response.json();
+      setMessages((prev) => [...prev, data.message]);
+      setInput("");
+    } catch (err) {
+      console.error("Send error:", err);
+      setError(String(err));
+    }
+  };
+
+  /* Typing indicator */
+  const handleTyping = () => {
+    if (socket && conversationId) {
+      socket.emit("typing", { conversationId });
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-lg text-gray-600">Loading chat...</div>
+      </div>
+    );
+  }
+
+  if (error && !conversationId) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-red-50">
+        <div className="text-center">
+          <AlertCircle className="w-12 h-12 mx-auto mb-4 text-red-600" />
+          <p className="text-lg text-red-700 mb-6">{error}</p>
+          <a href="/" className="text-primary underline hover:text-primary/90">
+            Return to Home
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* Sidebar */}
-      <div className="w-64 bg-white border-r border-gray-200 p-6">
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-gray-800">Loan #00124</h2>
-          <p className="text-sm text-gray-600 mt-2">Client: John Doe</p>
-          <p className="text-sm text-gray-600">Status: Under Review</p>
-        </div>
-        <div className="flex items-center gap-3 mt-8">
-          <div className="w-10 h-10 rounded-full bg-blue-500 text-white flex items-center justify-center font-semibold">
-            {userName[0]}
+    <div className="flex h-screen flex-col bg-white">
+      {/* Header */}
+      <div className="border-b border-gray-200 bg-gray-50 p-4">
+        <div className="flex items-center gap-3">
+          <MessageCircle className="w-5 h-5 text-blue-600" />
+          <div>
+            <p className="font-semibold">{ADMIN_EMAIL}</p>
+            <p className="text-sm text-gray-600">Admin Support</p>
           </div>
-          <span className="text-sm font-medium text-gray-700">{userName}</span>
         </div>
       </div>
 
-      {/* Main Chat */}
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200 px-6 py-4">
-          <h1 className="text-2xl font-bold text-gray-800">Communication Portal</h1>
-          <p className="text-sm text-green-600 mt-1">● Live Session</p>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      {/* Messages Area */}
+      <ScrollArea className="flex-1 p-4">
+        <div className="space-y-4">
           {messages.length === 0 ? (
-            <div className="text-center text-gray-400 mt-10">
-              No messages yet. Start the conversation!
+            <div className="flex h-full items-center justify-center text-gray-400">
+              <div className="text-center">
+                <MessageCircle className="mx-auto mb-2 w-8 h-8 opacity-50" />
+                <p>No messages yet. Say hello!</p>
+              </div>
             </div>
           ) : (
-            messages.map((msg, i) => (
+            messages.map((msg) => (
               <div
-                key={i}
+                key={msg.id}
                 className={`flex ${
-                  msg.user === userName ? "justify-end" : "justify-start"
+                  msg.sender_id === currentUser?.id
+                    ? "justify-end"
+                    : "justify-start"
                 }`}
               >
                 <div
-                  className={`max-w-md rounded-lg p-4 ${
-                    msg.user === userName
-                      ? "bg-blue-500 text-white"
-                      : "bg-white border border-gray-200"
+                  className={`max-w-xs rounded-lg px-4 py-2 ${
+                    msg.sender_id === currentUser?.id
+                      ? "bg-blue-500 text-white rounded-br-none"
+                      : "bg-gray-100 text-gray-900 rounded-bl-none"
                   }`}
                 >
-                  <div className="font-semibold text-sm mb-1">{msg.user}</div>
-                  {msg.type === "file" ? (
-                    <a
-                      href={msg.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline"
-                    >
-                      📄 {msg.text || "Document"}
-                    </a>
-                  ) : (
-                    <div className="text-sm">{msg.text}</div>
-                  )}
-                  <div className="text-xs opacity-70 mt-2">
-                    {new Date(msg.timestamp).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                  <p className="text-sm">{msg.message_text}</p>
+                  <div
+                    className={`mt-1 flex items-center gap-1 text-xs ${
+                      msg.sender_id === currentUser?.id
+                        ? "text-blue-100"
+                        : "text-gray-500"
+                    }`}
+                  >
+                    <span>
+                      {new Date(msg.created_at).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                    {msg.sender_id === currentUser?.id && (
+                      <span>
+                        {msg.status === "read"
+                          ? "✓✓"
+                          : msg.status === "delivered"
+                            ? "✓"
+                            : "○"}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
             ))
           )}
-          <div ref={scrollRef} />
-        </div>
 
-        {/* Input */}
-        <div className="bg-white border-t border-gray-200 p-4">
-          <div className="flex items-center gap-3">
-            <input
-              type="file"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-              className="text-sm"
-            />
-            <button className="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded">
-              +
-            </button>
-            <input
-              type="text"
-              placeholder="Type your message..."
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            />
-            <button
-              onClick={sendMessage}
-              className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-medium"
-            >
-              Send Message
-            </button>
-          </div>
-          {file && (
-            <div className="mt-2 text-sm text-gray-600">
-              Selected: {file.name}
+          {isTyping && (
+            <div className="flex justify-start">
+              <div className="bg-gray-100 rounded-lg px-4 py-3 flex gap-1">
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                <div
+                  className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                  style={{ animationDelay: "0.1s" }}
+                />
+                <div
+                  className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                  style={{ animationDelay: "0.2s" }}
+                />
+              </div>
             </div>
           )}
+
+          <div ref={bottomRef} />
+        </div>
+      </ScrollArea>
+
+      {/* Input Area */}
+      <div className="border-t border-gray-200 bg-white p-4">
+        <div className="flex gap-2">
+          <Input
+            placeholder="Type a message..."
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              handleTyping();
+            }}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            disabled={!conversationId}
+          />
+          <Button
+            onClick={sendMessage}
+            disabled={!conversationId || !input.trim()}
+            className="gap-2"
+          >
+            <Send className="w-4 h-4" />
+          </Button>
         </div>
       </div>
     </div>
